@@ -1,14 +1,16 @@
 import tensorflow as tf
 import numpy as np
 from loading_input import *
+from pointnetvlad.pointnetvlad_cls import *
+import nets.resnet_v1_50 as resnet
 
 # 1 for point cloud only, 2 for image only, 3 for pc&img&fc
 TRAINING_MODE = 3
-TRAIN_ALL = True
-ONLY_TRAIN_FUSION = True
+#TRAIN_ALL = True
+ONLY_TRAIN_FUSION = False
 
 # is rand init 
-RAND_INIT = False
+RAND_INIT = True
 
 # model path
 MODEL_PATH = ""
@@ -16,19 +18,20 @@ PC_MODEL_PATH = ""
 IMG_MODEL_PATH = ""
 
 # log path
-LOG_PATH = ""
+LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save"
 
-# Epoch & Batch size &FINAL EMBBED SIZE
+# Epoch & Batch size &FINAL EMBBED SIZE & learning rate
 EPOCH = 20
 LOAD_BATCH_SIZE = 20
 FEAT_BARCH_SIZE = 2
 LOAD_FEAT_RATIO = LOAD_BATCH_SIZE//FEAT_BARCH_SIZE
 EMBBED_SIZE = 256
+BASE_LEARNING_RATE = 5e-5
 
 #pos num,neg num,other neg num,all_num
 POS_NUM = 2
-NEG_NUM = 2
-OTH_NUM = 2
+NEG_NUM = 10
+OTH_NUM = 1
 BATCH_DATA_SIZE = 1 + POS_NUM + NEG_NUM + OTH_NUM
 
 # Hard example mining start
@@ -42,15 +45,31 @@ MARGIN2 = 0.2
 TRAIN_FILE = 'generate_queries/training_queries_RobotCar.pickle'
 TRAINING_QUERIES = get_queries_dict(TRAIN_FILE)
 
+def get_learning_rate(epoch):
+	learning_rate = BASE_LEARNING_RATE*((0.9)**(epoch//5))
+	learning_rate = tf.maximum(learning_rate, 0.00001) # CLIP THE LEARNING RATE!
+	return learning_rate
+
+def get_bn_decay(step):
+	#batch norm parameter
+	DECAY_STEP = 200000
+	BN_INIT_DECAY = 0.5
+	BN_DECAY_DECAY_RATE = 0.5
+	BN_DECAY_DECAY_STEP = float(DECAY_STEP)
+	BN_DECAY_CLIP = 0.99
+	bn_momentum = tf.train.exponential_decay(BN_INIT_DECAY,step*FEAT_BARCH_SIZE,BN_DECAY_DECAY_STEP,BN_DECAY_DECAY_RATE,staircase=True)
+	bn_decay = tf.minimum(BN_DECAY_CLIP, 1 - bn_momentum)
+	return bn_decay
+
 def init_imgnetwork():
-	img_placeholder = tf.placeholder(tf.float32,shape=[BATCH_NUM_QUERIES*(1+POSITIVES_PER_QUERY+NEGATIVES_PER_QUERY),144,288,3])
-	endpoints,body_prefix = resnet.endpoints(images_placeholder,is_training=True)
+	img_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BARCH_SIZE*BATCH_DATA_SIZE,144,288,3])
+	endpoints,body_prefix = resnet.endpoints(img_placeholder,is_training=True)
 	return img_placeholder,endpoints['model_output']
 	
-def init_pcnetwork(batch):
-	pc_placeholder = tf.placeholder(tf.float32,shape=[BATCH_NUM_QUERIES*(1+POSITIVES_PER_QUERY+NEGATIVES_PER_QUERY),4096,3])
+def init_pcnetwork(step):
+	pc_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BARCH_SIZE*BATCH_DATA_SIZE,4096,3])
 	is_training_pl = tf.Variable(True, name = 'is_training')
-	bn_decay = get_bn_decay(batch)
+	bn_decay = get_bn_decay(step)
 	endpoints = pointnetvlad(pc_placeholder,is_training_pl,bn_decay)
 	return pc_placeholder,endpoints
 	
@@ -65,7 +84,7 @@ def init_pcainetwork():
 	
 	#init sub-network
 	if TRAINING_MODE != 2:
-		pc_placeholder, pc_feat = init_pcnetwork()
+		pc_placeholder, pc_feat = init_pcnetwork(step)
 	if TRAINING_MODE != 1:
 		img_placeholder, img_feat = init_imgnetwork()
 	if TRAINING_MODE == 3:
@@ -75,19 +94,21 @@ def init_pcainetwork():
 	if TRAINING_MODE != 2:
 		pc_feat = tf.reshape(pc_feat,[FEAT_BARCH_SIZE,BATCH_DATA_SIZE,pc_feat.shape[1]])
 		q_pc_vec, pos_pc_vec, neg_pc_vec, oth_pc_vec = tf.split(pc_feat, [1,POS_NUM,NEG_NUM,OTH_NUM],1)
-		pc_loss = quadruplet_loss(q_pc_vec, pos_pc_vec, neg_pc_vec, oth_pc_vec, MARGIN1)
+		pc_loss = lazy_quadruplet_loss(q_pc_vec, pos_pc_vec, neg_pc_vec, oth_pc_vec, MARGIN1, MARGIN2)
 		tf.summary.scalar('pc_loss', pc_loss)
+
 		
 	if TRAINING_MODE != 1:
 		img_feat = tf.reshape(img_feat,[FEAT_BARCH_SIZE,BATCH_DATA_SIZE,img_feat.shape[1]])
 		q_img_vec, pos_img_vec, neg_img_vec, oth_img_vec = tf.split(img_feat, [1,POS_NUM,NEG_NUM,OTH_NUM],1)
-		img_loss = quadruplet_loss(q_img_vec, pos_img_vec, neg_img_vec, oth_img_vec, MARGIN1)
+		img_loss = lazy_quadruplet_loss(q_img_vec, pos_img_vec, neg_img_vec, oth_img_vec, MARGIN1, MARGIN2)
 		tf.summary.scalar('img_loss', img_loss)
-		
+	
+	
 	if TRAINING_MODE == 3:
 		pcai_feat = tf.reshape(pcai_feat,[FEAT_BARCH_SIZE,BATCH_DATA_SIZE,pcai_feat.shape[1]])
 		q_vec, pos_vec, neg_vec, oth_vec = tf.split(pcai_feat, [1,POS_NUM,NEG_NUM,OTH_NUM],1)
-		all_loss = quadruplet_loss(q_vec, pos_vec, neg_vec, oth_vec, MARGIN1)
+		all_loss = lazy_quadruplet_loss(q_vec, pos_vec, neg_vec, oth_vec, MARGIN1, MARGIN2)
 		tf.summary.scalar('all_loss', all_loss)
 		
 	#learning rate strategy, all in one?
@@ -167,7 +188,6 @@ def init_pcainetwork():
 			"all_train_op":all_train_op,
 			"merged":merged,
 			"step":step}
-		}
 		return ops
 		
 
@@ -290,18 +310,23 @@ def main():
 	config = tf.ConfigProto()
 	config.gpu_options.allow_growth=True
 	
+	
 	#init tensorflow Session
 	with tf.Session(config=config) as sess:
 		#init all the variable
 		init_network_variable(sess,train_saver)
 		train_writer = tf.summary.FileWriter(LOG_PATH, sess.graph)
 		
+		#20200207 job done
+		#20200208 todo 
+		#get_load_batch_filename
+		
 		#start training
 		for ep in range(EPOCH):
 			train_file_num = len(TRAINING_QUERIES.keys())
 			train_file_idxs = np.arange(0,len(TRAINING_QUERIES.keys()))
 			np.random.shuffle(train_file_idxs)
-			print('train_file_num = %f , BATCH_NUM_QUERIES = %f , iteration per batch = %f' %(len(train_file_idxs), BATCH_NUM_QUERIES,len(train_file_idxs)//BATCH_NUM_QUERIES))
+			print('train_file_num = %f , BATCH_NUM_QUERIES = %f , iteration per batch = %f' %(len(train_file_idxs), FEAT_BARCH_SIZE,len(train_file_idxs)//FEAT_BARCH_SIZE))
 			
 			#for each load batch
 			for load_batch in range(train_file_num//LOAD_BATCH_SIZE):
