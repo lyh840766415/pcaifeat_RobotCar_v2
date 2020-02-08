@@ -11,8 +11,10 @@ import cv2
 #thread pool
 pool = ThreadPool(20)
 
+# log path
+LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_img"
 # 1 for point cloud only, 2 for image only, 3 for pc&img&fc
-TRAINING_MODE = 3
+TRAINING_MODE = 2
 #TRAIN_ALL = True
 ONLY_TRAIN_FUSION = False
 
@@ -30,12 +32,10 @@ IMG_MODEL_PATH = ""
 #image path
 IMAGE_PATH = "/data/lyh/RobotCar"
 
-# log path
-LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save"
 
 # Epoch & Batch size &FINAL EMBBED SIZE & learning rate
-EPOCH = 2000
-LOAD_BATCH_SIZE = 20
+EPOCH = 20
+LOAD_BATCH_SIZE = 100
 FEAT_BARCH_SIZE = 2
 LOAD_FEAT_RATIO = LOAD_BATCH_SIZE//FEAT_BARCH_SIZE
 EMBBED_SIZE = 256
@@ -80,20 +80,25 @@ def get_bn_decay(step):
 	return bn_decay
 
 def init_imgnetwork():
-	img_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BARCH_SIZE*BATCH_DATA_SIZE,144,288,3])
-	endpoints,body_prefix = resnet.endpoints(img_placeholder,is_training=True)
-	return img_placeholder,endpoints['model_output']
+	with tf.variable_scope("img_var"):
+		img_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BARCH_SIZE*BATCH_DATA_SIZE,144,288,3])
+		endpoints,body_prefix = resnet.endpoints(img_placeholder,is_training=True)
+		img_feat = tf.layers.dense(endpoints['model_output'],EMBBED_SIZE)
+	return img_placeholder,img_feat
 	
 def init_pcnetwork(step):
-	pc_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BARCH_SIZE*BATCH_DATA_SIZE,4096,3])
-	is_training_pl = tf.Variable(True, name = 'is_training')
-	bn_decay = get_bn_decay(step)
-	endpoints = pointnetvlad(pc_placeholder,is_training_pl,bn_decay)
-	return pc_placeholder,endpoints
+	with tf.variable_scope("pc_var"):
+		pc_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BARCH_SIZE*BATCH_DATA_SIZE,4096,3])
+		is_training_pl = tf.Variable(True, name = 'is_training')
+		bn_decay = get_bn_decay(step)
+		endpoints = pointnetvlad(pc_placeholder,is_training_pl,bn_decay)
+		pc_feat = tf.layers.dense(endpoints,EMBBED_SIZE)
+	return pc_placeholder,pc_feat
 	
 def init_fusion_network(pc_feat,img_feat):
-	img_pc_concat_feat = tf.concat((pc_feat,img_feat),axis=1)
-	pcai_feat = tf.layers.dense(img_pc_concat_feat,EMBBED_SIZE)
+	with tf.variable_scope("fusion_var"):
+		img_pc_concat_feat = tf.concat((pc_feat,img_feat),axis=1)
+		pcai_feat = tf.layers.dense(img_pc_concat_feat,EMBBED_SIZE)
 	return pcai_feat
 
 def init_pcainetwork():
@@ -165,7 +170,7 @@ def init_pcainetwork():
 			"pc_train_op":pc_train_op,
 			"merged":merged,
 			"step":step}
-		return
+		return ops
 		
 	if TRAINING_MODE == 2:
 		ops = {
@@ -247,12 +252,13 @@ def init_train_saver():
 	
 	return train_saver
 	
-def prepare_batch_data(pc_data,img_data,feat_batch,ops):
+def prepare_batch_data(pc_data,img_data,feat_batch,ops,ep):
 	if TRAINING_MODE != 2:
 		feat_batch_pc = pc_data[feat_batch*BATCH_DATA_SIZE*FEAT_BARCH_SIZE:(feat_batch+1)*BATCH_DATA_SIZE*FEAT_BARCH_SIZE]
 	if TRAINING_MODE != 1:
 		feat_batch_img = img_data[feat_batch*BATCH_DATA_SIZE*FEAT_BARCH_SIZE:(feat_batch+1)*BATCH_DATA_SIZE*FEAT_BARCH_SIZE]
 	
+
 	if TRAINING_MODE == 1:
 		train_feed_dict = {
 			ops["pc_placeholder"]:feat_batch_pc,
@@ -275,7 +281,7 @@ def prepare_batch_data(pc_data,img_data,feat_batch,ops):
 	print("prepare_batch_data_error,no_such train mode.")
 	exit()
 
-def train_one_step(ops,train_feed_dict):
+def train_one_step(sess,ops,train_feed_dict,train_writer):
 	if TRAINING_MODE == 1:
 		summary,step,pc_loss,_,= sess.run([ops["merged"],ops["step"],ops["pc_loss"],ops["pc_train_op"]],feed_dict = train_feed_dict)
 		print("batch num = %d , pc_loss = %f"%(step, pc_loss))
@@ -300,18 +306,22 @@ def train_one_step(ops,train_feed_dict):
 def evaluate():
 	return
 	
-def model_save(step):
+def model_save(sess,step,train_saver):
 	if TRAINING_MODE == 1:
 		save_path = train_saver['pc_saver'].save(sess,os.path.join(LOG_PATH, "pc_model_%08d.ckpt"%(step)))
-		print("Model saved in file: %s" % save_path)
+		print("PC Model saved in file: %s" % save_path)
 		return
 		
 	if TRAINING_MODE == 2:
 		save_path = train_saver['img_saver'].save(sess,os.path.join(LOG_PATH, "img_model_%08d.ckpt"%(step)))
-		print("Model saved in file: %s" % save_path)
+		print("IMG Model saved in file: %s" % save_path)
 		return
 	
 	if TRAINING_MODE == 3:
+		save_path = train_saver['pc_saver'].save(sess,os.path.join(LOG_PATH, "pc_model_%08d.ckpt"%(step)))
+		print("PC Model saved in file: %s" % save_path)
+		save_path = train_saver['img_saver'].save(sess,os.path.join(LOG_PATH, "img_model_%08d.ckpt"%(step)))
+		print("IMG Model saved in file: %s" % save_path)
 		save_path = train_saver['all_saver'].save(sess,os.path.join(LOG_PATH, "model_%08d.ckpt"%(step)))
 		print("Model saved in file: %s" % save_path)
 		return
@@ -367,8 +377,15 @@ def get_load_batch_filename(load_batch_keys,quadruplet):
 									
 			pc_files.append(TRAINING_QUERIES[neg_ind]["query"])
 			img_files.append(get_correspond_img(TRAINING_QUERIES[neg_ind]["query"]))
+	
+	if TRAINING_MODE == 1:
+		return pc_files,None
+	
+	if TRAINING_MODE == 2:
+		return None,img_files
 		
-	return pc_files,img_files
+	if TRAINING_MODE == 3:
+		return pc_files,img_files
 	
 
 def get_batch_keys(train_file_idxs,train_file_num):
@@ -423,37 +440,32 @@ def main():
 				batch_reach_end,load_batch_keys = get_batch_keys(train_file_idxs,train_file_num)
 				if(batch_reach_end):
 					break
-					
-				#select load_batch tuple	
+				
+				#select load_batch tuple
 				load_pc_filenames,load_img_filenames = get_load_batch_filename(load_batch_keys,quadruplet)
-					
-				print("load_pc_filenames len = ",len(load_pc_filenames))
-				print("load_img_filenames len = ",len(load_img_filenames))
+				
 				cnt = cnt + 1
 				print("ep = %d, cnt = %d"%(ep,cnt))
 				
 				#load pc&img data from file
 				pc_data,img_data = load_img_pc(load_pc_filenames,load_img_filenames,pool)
 				
-				print(pc_data[45,:,:].shape)
-				print(img_data[45,:,:,:].shape)
-				
 				#20200208 1510 done
 
 				#for each feat_batch
 				for feat_batch in range(LOAD_FEAT_RATIO):
 					#prepare this batch data
-					train_feed_dict = prepare_batch_data(pc_data,img_data,feat_batch,ops)
+					train_feed_dict = prepare_batch_data(pc_data,img_data,feat_batch,ops,ep)
 										
 					#training
-					step = train_one_step(ops,train_feed_dict)
+					step = train_one_step(sess,ops,train_feed_dict,train_writer)
 					
 					#evaluate TODO
 					if step%201 == 0:
 						evaluate()
 					
 					if step%3001 == 0:
-						model_save(step)
+						model_save(sess,step,train_saver)
 					
 					#TODO: Add hard mining
 					'''

@@ -97,10 +97,13 @@ def load_images(filenames):
 
 def load_img_pc(load_pc_filenames,load_img_filenames,pool):
 	pcs = []
-	pcs = pool.map(load_pc_file,load_pc_filenames)
-	imgs=[]
-	imgs = pool.map(load_image,load_img_filenames)
-	pcs = np.array(pcs)
-	imgs=np.array(imgs)
+	imgs = []
+	if load_pc_filenames != None:
+		pcs = pool.map(load_pc_file,load_pc_filenames)
+		pcs = np.array(pcs)
+	if load_img_filenames != None:
+		imgs = pool.map(load_image,load_img_filenames)
+		imgs=np.array(imgs)
+	
 	return pcs,imgs
 	
