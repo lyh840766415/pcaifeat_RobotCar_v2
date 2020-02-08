@@ -30,24 +30,20 @@ def get_pc_img_match_dict(filename):
 def load_pc_file(filename):
 	if not os.path.exists(filename):
 		print(filename)
-		return np.zeros((4096,3)),True
+		return np.zeros((4096,3))
+		exit()
 		
 	#returns Nx3 matrix
 	#print(filename)
 	pc=np.fromfile(filename, dtype=np.float64)
 	if(pc.shape[0]!= 4096*3):
 		print("Error in pointcloud shape")
-		return np.array([]),True
+		return np.array([])
+		print(filename)
+		exit()
 
 	pc=np.reshape(pc,(pc.shape[0]//3,3))
-	return pc,True
-		
-	#print("pointcloud shape ", pc_4096.shape)
-	#np.savetxt('result.txt', pc_4096, fmt="%.5f", delimiter = ',')
-	#exit()
-		#return np.array([])
-
-	return pc_4096,True
+	return pc
 
 def load_pc_files(filenames):
 	pcs=[]
@@ -62,15 +58,31 @@ def load_pc_files(filenames):
 	pcs=np.array(pcs)
 	return pcs,True
 
+def load_pc_file_save_2_txt(filename,output_dir):
+	if not os.path.exists(filename):
+		print(filename)
+		return np.zeros((4096,3)),True
+		
+	#returns Nx3 matrix
+	#print(filename)
+	pc=np.fromfile(filename, dtype=np.float64)
+	if(pc.shape[0]!= 4096*3):
+		print("Error in pointcloud shape")
+		return np.array([]),True
+
+	pc=np.reshape(pc,(pc.shape[0]//3,3))
+	np.savetxt(os.path.join(output_dir,"%s.xyz"%(filename[-20:-4])), pc, fmt="%.5f", delimiter = ',')
+	return pc,True
+	
 def load_image(filename):
 	#return scaled image
 	if not os.path.exists(filename):
 		print(filename)
-		return np.zeros((288,144,3)),True
+		return np.zeros((288,144,3))
 		
 	img = cv2.imread(filename)
 	img = cv2.resize(img,(288,144))
-	return img,True
+	return img
 
 def load_images(filenames):
 	imgs=[]
@@ -83,3 +95,12 @@ def load_images(filenames):
 	imgs=np.array(imgs)
 	return imgs,True
 
+def load_img_pc(load_pc_filenames,load_img_filenames,pool):
+	pcs = []
+	pcs = pool.map(load_pc_file,load_pc_filenames)
+	imgs=[]
+	imgs = pool.map(load_image,load_img_filenames)
+	pcs = np.array(pcs)
+	imgs=np.array(imgs)
+	return pcs,imgs
+	

@@ -3,6 +3,13 @@ import numpy as np
 from loading_input import *
 from pointnetvlad.pointnetvlad_cls import *
 import nets.resnet_v1_50 as resnet
+import shutil
+from multiprocessing.dummy import Pool as ThreadPool
+import time
+import cv2
+
+#thread pool
+pool = ThreadPool(20)
 
 # 1 for point cloud only, 2 for image only, 3 for pc&img&fc
 TRAINING_MODE = 3
@@ -12,16 +19,22 @@ ONLY_TRAIN_FUSION = False
 # is rand init 
 RAND_INIT = True
 
+#Loss
+quadruplet = True
+
 # model path
 MODEL_PATH = ""
 PC_MODEL_PATH = ""
 IMG_MODEL_PATH = ""
 
+#image path
+IMAGE_PATH = "/data/lyh/RobotCar"
+
 # log path
 LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save"
 
 # Epoch & Batch size &FINAL EMBBED SIZE & learning rate
-EPOCH = 20
+EPOCH = 2000
 LOAD_BATCH_SIZE = 20
 FEAT_BARCH_SIZE = 2
 LOAD_FEAT_RATIO = LOAD_BATCH_SIZE//FEAT_BARCH_SIZE
@@ -30,7 +43,7 @@ BASE_LEARNING_RATE = 5e-5
 
 #pos num,neg num,other neg num,all_num
 POS_NUM = 2
-NEG_NUM = 10
+NEG_NUM = 5
 OTH_NUM = 1
 BATCH_DATA_SIZE = 1 + POS_NUM + NEG_NUM + OTH_NUM
 
@@ -41,9 +54,14 @@ HARD_MINING_START = 5
 MARGIN1 = 0.5
 MARGIN2 = 0.2
 
-#Train file index
+#Train file index & pc img matching
 TRAIN_FILE = 'generate_queries/training_queries_RobotCar.pickle'
 TRAINING_QUERIES = get_queries_dict(TRAIN_FILE)
+PC_IMG_MATCH_FILE = 'generate_queries/pcai_pointcloud_image_match.pickle'
+PC_IMG_MATCH_DICT = get_pc_img_match_dict(PC_IMG_MATCH_FILE)
+
+#cur_load for get_batch_keys
+CUR_LOAD = 0
 
 def get_learning_rate(epoch):
 	learning_rate = BASE_LEARNING_RATE*((0.9)**(epoch//5))
@@ -297,9 +315,81 @@ def model_save(step):
 		save_path = train_saver['all_saver'].save(sess,os.path.join(LOG_PATH, "model_%08d.ckpt"%(step)))
 		print("Model saved in file: %s" % save_path)
 		return
-			
-			
+
+def get_correspond_img(pc_filename):
+	timestamp = pc_filename[-20:-4]
+	seq_name = pc_filename[-65:-46]
+	image_ind = PC_IMG_MATCH_DICT[seq_name][timestamp]
+	image_timestamp = image_ind[random.randint(0,len(image_ind)-1)]
+	image_filename = os.path.join(IMAGE_PATH,seq_name,"stereo/centre","%s.png"%(image_timestamp))
+	#print(image_filename)
+	#if os.path.exists(image_filename):
+	#	print("exist")
+	return image_filename
+
+def is_negative(query,not_negative):
+	return not query in not_negative
+	
+def get_load_batch_filename(load_batch_keys,quadruplet):		
+	pc_files = []
+	img_files = []
+	for key in load_batch_keys:
+		pc_files.append(TRAINING_QUERIES[key]["query"])
+		img_files.append(get_correspond_img(TRAINING_QUERIES[key]["query"]))
+		random.shuffle(TRAINING_QUERIES[key]["positives"])
+		for i in range(POS_NUM):
+			pc_files.append(TRAINING_QUERIES[TRAINING_QUERIES[key]["positives"][i]]["query"])
+			img_files.append(get_correspond_img(TRAINING_QUERIES[TRAINING_QUERIES[key]["positives"][i]]["query"]))
+		
+		neg_indices = []
+		for i in range(NEG_NUM):
+			while True:
+				neg_ind = random.randint(0,len(TRAINING_QUERIES.keys())-1)
+				if is_negative(neg_ind,TRAINING_QUERIES[key]["not_negative"]):
+					break
+			neg_indices.append(neg_ind)
+			pc_files.append(TRAINING_QUERIES[neg_ind]["query"])
+			img_files.append(get_correspond_img(TRAINING_QUERIES[neg_ind]["query"]))
+		
+		if quadruplet:
+			neighbors=[]
+			for pos in TRAINING_QUERIES[key]["positives"]:
+				neighbors.append(pos)
+			for neg in neg_indices:
+				for pos in TRAINING_QUERIES[neg]["positives"]:
+					neighbors.append(pos)
+					
+			#print("neighbors size = ",len(neighbors))
+			while True:
+				neg_ind = random.randint(0,len(TRAINING_QUERIES.keys())-1)
+				if is_negative(neg_ind,neighbors):
+					break
+									
+			pc_files.append(TRAINING_QUERIES[neg_ind]["query"])
+			img_files.append(get_correspond_img(TRAINING_QUERIES[neg_ind]["query"]))
+		
+	return pc_files,img_files
+	
+
+def get_batch_keys(train_file_idxs,train_file_num):
+	global CUR_LOAD
+	load_batch_keys = []
+	while len(load_batch_keys) < LOAD_BATCH_SIZE:
+		#make sure cur_load is valid
+		if CUR_LOAD >= train_file_num:
+			return True,None
+		if len(TRAINING_QUERIES[train_file_idxs[CUR_LOAD]]["positives"]) < POS_NUM:
+			CUR_LOAD = CUR_LOAD + 1
+			continue
+		load_batch_keys.append(train_file_idxs[CUR_LOAD])
+		CUR_LOAD = CUR_LOAD + 1
+	#print(load_batch_keys)
+	return False,load_batch_keys
+	
+		
 def main():
+	global CUR_LOAD
+	
 	#init network pipeline
 	ops = init_pcainetwork()
 	
@@ -317,27 +407,39 @@ def main():
 		init_network_variable(sess,train_saver)
 		train_writer = tf.summary.FileWriter(LOG_PATH, sess.graph)
 		
-		#20200207 job done
-		#20200208 todo 
-		#get_load_batch_filename
-		
 		#start training
 		for ep in range(EPOCH):
 			train_file_num = len(TRAINING_QUERIES.keys())
-			train_file_idxs = np.arange(0,len(TRAINING_QUERIES.keys()))
+			train_file_idxs = np.arange(0,train_file_num)
 			np.random.shuffle(train_file_idxs)
-			print('train_file_num = %f , BATCH_NUM_QUERIES = %f , iteration per batch = %f' %(len(train_file_idxs), FEAT_BARCH_SIZE,len(train_file_idxs)//FEAT_BARCH_SIZE))
+			print('Eppch = %d, train_file_num = %f , FEAT_BATCH_SIZE = %f , iteration per batch = %f' %(ep,len(train_file_idxs), FEAT_BARCH_SIZE,len(train_file_idxs)//FEAT_BARCH_SIZE))
 			
 			#for each load batch
-			for load_batch in range(train_file_num//LOAD_BATCH_SIZE):
-				load_batch_keys = train_file_idxs[load_batch*LOAD_BATCH_SIZE:(load_batch+1)*LOAD_BATCH_SIZE]
-				
+			batch_reach_end = False
+			CUR_LOAD = 0
+			#wait for delete,debug veriable
+			cnt = 0
+			while True:
+				batch_reach_end,load_batch_keys = get_batch_keys(train_file_idxs,train_file_num)
+				if(batch_reach_end):
+					break
+					
 				#select load_batch tuple	
-				load_pc_filenames,load_img_filenames = get_load_batch_filename(load_batch_keys)
+				load_pc_filenames,load_img_filenames = get_load_batch_filename(load_batch_keys,quadruplet)
+					
+				print("load_pc_filenames len = ",len(load_pc_filenames))
+				print("load_img_filenames len = ",len(load_img_filenames))
+				cnt = cnt + 1
+				print("ep = %d, cnt = %d"%(ep,cnt))
 				
 				#load pc&img data from file
-				pc_data,img_data = load_img_pc(load_pc_filenames,load_img_filenames)
+				pc_data,img_data = load_img_pc(load_pc_filenames,load_img_filenames,pool)
 				
+				print(pc_data[45,:,:].shape)
+				print(img_data[45,:,:,:].shape)
+				
+				#20200208 1510 done
+
 				#for each feat_batch
 				for feat_batch in range(LOAD_FEAT_RATIO):
 					#prepare this batch data
