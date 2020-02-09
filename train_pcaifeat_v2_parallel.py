@@ -444,6 +444,8 @@ def main():
 			#wait for delete,debug veriable
 			cnt = 0
 			while True:
+				
+				
 				batch_reach_end,load_batch_keys = get_batch_keys(train_file_idxs,train_file_num)
 				if(batch_reach_end):
 					break
@@ -456,8 +458,6 @@ def main():
 				
 				#load pc&img data from file
 				pc_data,img_data = load_img_pc(load_pc_filenames,load_img_filenames,pool)
-				
-				#20200208 1510 done
 
 				#for each feat_batch
 				for feat_batch in range(LOAD_FEAT_RATIO):
