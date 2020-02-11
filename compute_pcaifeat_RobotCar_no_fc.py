@@ -24,7 +24,7 @@ PC_IMG_MATCH_DICT = get_pc_img_match_dict(PC_IMG_MATCH_FILE)
 
 #model_path & image path
 IMAGE_PATH = '/data/lyh/RobotCar'
-PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pc_model/pc_model_00393131.ckpt"
+PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pc_model_no_fc/pc_model_00633211.ckpt"
 IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/img_model/img_model_00291097.ckpt"
 MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/model_00219073.ckpt"
 
@@ -304,8 +304,7 @@ def init_pcnetwork(step):
 		is_training_pl = tf.Variable(False, name = 'is_training')
 		bn_decay = get_bn_decay(step)
 		endpoints = pointnetvlad(pc_placeholder,is_training_pl,bn_decay)
-		pc_feat = tf.layers.dense(endpoints,EMBBED_SIZE)
-	return pc_placeholder,pc_feat
+	return pc_placeholder,endpoints
 	
 def init_fusion_network(pc_feat,img_feat):
 	with tf.variable_scope("fusion_var"):

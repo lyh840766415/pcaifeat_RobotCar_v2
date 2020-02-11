@@ -19,7 +19,7 @@ MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/model_00234078
 PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pc_model/pc_model_00414138.ckpt"
 IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_img/models/img_model_00072024.ckpt"
 # log path
-LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc"
+LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc_no_fc"
 # 1 for point cloud only, 2 for image only, 3 for pc&img&fc
 TRAINING_MODE = 1
 #TRAIN_ALL = True
@@ -44,7 +44,7 @@ BASE_LEARNING_RATE = 3.6e-5
 
 #pos num,neg num,other neg num,all_num
 POS_NUM = 2
-NEG_NUM = 2
+NEG_NUM = 5
 OTH_NUM = 1
 BATCH_DATA_SIZE = 1 + POS_NUM + NEG_NUM + OTH_NUM
 
@@ -103,8 +103,8 @@ def init_pcnetwork(step):
 		is_training_pl = tf.Variable(True, name = 'is_training')
 		bn_decay = get_bn_decay(step)
 		endpoints = pointnetvlad(pc_placeholder,is_training_pl,bn_decay)
-		pc_feat = tf.layers.dense(endpoints,EMBBED_SIZE)
-	return pc_placeholder,pc_feat
+		#pc_feat = tf.layers.dense(endpoints,EMBBED_SIZE)
+	return pc_placeholder,endpoints
 	
 def init_fusion_network(pc_feat,img_feat):
 	with tf.variable_scope("fusion_var"):

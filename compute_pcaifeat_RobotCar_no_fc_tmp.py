@@ -1,5 +1,5 @@
 import numpy as np
-from loading_input import *
+from loading_input_tmp import *
 from pointnetvlad.pointnetvlad_cls import *
 import nets.resnet_v1_50 as resnet
 import tensorflow as tf
@@ -12,19 +12,23 @@ pool = ThreadPool(40)
 
 # 1 for point cloud only, 2 for image only, 3 for pc&img&fc
 TRAINING_MODE = 1
-BATCH_SIZE = 50
+BATCH_SIZE = 100
 EMBBED_SIZE = 256
 
-DATABASE_FILE= 'generate_queries/RobotCar_oxford_evaluation_database.pickle'
-QUERY_FILE= 'generate_queries/RobotCar_oxford_evaluation_query.pickle'
+DATABASE_FILE= '/data/lyh/lab/pointnetvlad/generating_queries/oxford_evaluation_database.pickle'
+QUERY_FILE= '/data/lyh/lab/pointnetvlad/generating_queries/oxford_evaluation_query.pickle'
 PC_IMG_MATCH_FILE = 'generate_queries/pcai_pointcloud_image_match_test.pickle'
 DATABASE_SETS= get_sets_dict(DATABASE_FILE)
+#print(DATABASE_SETS.keys())
+#print(DATABASE_SETS[0])
+#exit()
+
 QUERY_SETS= get_sets_dict(QUERY_FILE)
 PC_IMG_MATCH_DICT = get_pc_img_match_dict(PC_IMG_MATCH_FILE)
 
 #model_path & image path
 IMAGE_PATH = '/data/lyh/RobotCar'
-PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pc_model/pc_model_00393131.ckpt"
+PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc_ori_label/pc_model_00300100.ckpt"
 IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/img_model/img_model_00291097.ckpt"
 MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/model_00219073.ckpt"
 
@@ -73,9 +77,6 @@ def get_load_batch_filename(dict_to_process,batch_keys,edge = False,remind_index
 			pc_files.append(dict_to_process[batch_keys[i]]["query"])			
 			img_files.append(get_correspond_img(dict_to_process[batch_keys[i]]["query"]))
 		
-
-	
-	
 	
 	if TRAINING_MODE == 1:
 		return pc_files,None
@@ -85,8 +86,10 @@ def get_load_batch_filename(dict_to_process,batch_keys,edge = False,remind_index
 		return pc_files,img_files	
 
 def prepare_batch_data(pc_data,img_data,ops):
+	is_training=False
 	if TRAINING_MODE == 1:
 		train_feed_dict = {
+			ops['is_training_pl']:is_training,
 			ops["pc_placeholder"]:pc_data}
 		return train_feed_dict
 		
@@ -97,6 +100,7 @@ def prepare_batch_data(pc_data,img_data,ops):
 		
 	if TRAINING_MODE == 3:
 		train_feed_dict = {
+			ops['is_training_pl']:is_training,
 			ops["img_placeholder"]:img_data,
 			ops["pc_placeholder"]:pc_data}
 		return train_feed_dict
@@ -266,7 +270,6 @@ def cal_all_features(ops,sess):
 	
 	for i in range(len(DATABASE_SETS)):
 		cur_feat = get_latent_vectors(sess, ops, DATABASE_SETS[i])
-		
 		database_feat = append_feat(database_feat,cur_feat)
 			
 	for j in range(len(QUERY_SETS)):
@@ -301,11 +304,11 @@ def init_imgnetwork():
 def init_pcnetwork(step):
 	with tf.variable_scope("pc_var"):
 		pc_placeholder = tf.placeholder(tf.float32,shape=[BATCH_SIZE,4096,3])
-		is_training_pl = tf.Variable(False, name = 'is_training')
+		#is_training_pl = tf.Variable(False, name = 'is_training')
+		is_training_pl = tf.placeholder(tf.bool, shape=())
 		bn_decay = get_bn_decay(step)
 		endpoints = pointnetvlad(pc_placeholder,is_training_pl,bn_decay)
-		pc_feat = tf.layers.dense(endpoints,EMBBED_SIZE)
-	return pc_placeholder,pc_feat
+	return pc_placeholder,is_training_pl,endpoints
 	
 def init_fusion_network(pc_feat,img_feat):
 	with tf.variable_scope("fusion_var"):
@@ -319,7 +322,7 @@ def init_pcainetwork():
 	
 	#init sub-network
 	if TRAINING_MODE != 2:
-		pc_placeholder, pc_feat = init_pcnetwork(step)
+		pc_placeholder, is_training_pl, pc_feat = init_pcnetwork(step)
 	if TRAINING_MODE != 1:
 		img_placeholder, img_feat = init_imgnetwork()
 	if TRAINING_MODE == 3:
@@ -328,6 +331,7 @@ def init_pcainetwork():
 	#output of pcainetwork init
 	if TRAINING_MODE == 1:
 		ops = {
+			"is_training_pl":is_training_pl,
 			"pc_placeholder":pc_placeholder,
 			"pc_feat":pc_feat}
 		return ops
@@ -340,6 +344,7 @@ def init_pcainetwork():
 		
 	if TRAINING_MODE == 3:
 		ops = {
+			"is_training_pl":is_training_pl,
 			"pc_placeholder":pc_placeholder,
 			"img_placeholder":img_placeholder,
 			"pc_feat":pc_feat,
@@ -382,6 +387,9 @@ def init_network_variable(sess,train_saver):
 def main():
 	#init network pipeline
 	ops = init_pcainetwork()
+	#variables = tf.contrib.framework.get_variables_to_restore()
+	#print(variables)
+	#exit()
 	
 	#init train saver
 	train_saver = init_train_saver()

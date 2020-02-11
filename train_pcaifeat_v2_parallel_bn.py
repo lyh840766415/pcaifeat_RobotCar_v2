@@ -19,7 +19,7 @@ MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/model_00234078
 PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pc_model/pc_model_00414138.ckpt"
 IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_img/models/img_model_00072024.ckpt"
 # log path
-LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc"
+LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc_bn"
 # 1 for point cloud only, 2 for image only, 3 for pc&img&fc
 TRAINING_MODE = 1
 #TRAIN_ALL = True
@@ -44,7 +44,7 @@ BASE_LEARNING_RATE = 3.6e-5
 
 #pos num,neg num,other neg num,all_num
 POS_NUM = 2
-NEG_NUM = 2
+NEG_NUM = 18
 OTH_NUM = 1
 BATCH_DATA_SIZE = 1 + POS_NUM + NEG_NUM + OTH_NUM
 
@@ -100,11 +100,11 @@ def init_imgnetwork():
 def init_pcnetwork(step):
 	with tf.variable_scope("pc_var"):
 		pc_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BARCH_SIZE*BATCH_DATA_SIZE,4096,3])
-		is_training_pl = tf.Variable(True, name = 'is_training')
+		is_training_pl = tf.placeholder(tf.bool, shape=())
 		bn_decay = get_bn_decay(step)
 		endpoints = pointnetvlad(pc_placeholder,is_training_pl,bn_decay)
 		pc_feat = tf.layers.dense(endpoints,EMBBED_SIZE)
-	return pc_placeholder,pc_feat
+	return pc_placeholder,is_training_pl,pc_feat
 	
 def init_fusion_network(pc_feat,img_feat):
 	with tf.variable_scope("fusion_var"):
@@ -118,7 +118,7 @@ def init_pcainetwork():
 	
 	#init sub-network
 	if TRAINING_MODE != 2:
-		pc_placeholder, pc_feat = init_pcnetwork(step)
+		pc_placeholder, is_training_pl, pc_feat = init_pcnetwork(step)
 	if TRAINING_MODE != 1:
 		img_placeholder, img_feat = init_imgnetwork()
 	if TRAINING_MODE == 3:
@@ -175,6 +175,7 @@ def init_pcainetwork():
 	#output of pcainetwork init
 	if TRAINING_MODE == 1:
 		ops = {
+			"is_training_pl":is_training_pl,
 			"pc_placeholder":pc_placeholder,
 			"epoch_num_placeholder":epoch_num_placeholder,
 			"pc_loss":pc_loss,
@@ -195,6 +196,7 @@ def init_pcainetwork():
 		
 	if TRAINING_MODE == 3 and ONLY_TRAIN_FUSION:
 		ops = {
+			"is_training_pl":is_training_pl,
 			"pc_placeholder":pc_placeholder,
 			"img_placeholder":img_placeholder,
 			"epoch_num_placeholder":epoch_num_placeholder,
@@ -211,6 +213,7 @@ def init_pcainetwork():
 		
 	if TRAINING_MODE == 3:
 		ops = {
+			"is_training_pl":is_training_pl,
 			"pc_placeholder":pc_placeholder,
 			"img_placeholder":img_placeholder,
 			"epoch_num_placeholder":epoch_num_placeholder,
@@ -271,6 +274,7 @@ def init_train_saver():
 	return train_saver
 	
 def prepare_batch_data(pc_data,img_data,feat_batch,ops,ep):
+	is_training = True
 	if TRAINING_MODE != 2:
 		feat_batch_pc = pc_data[feat_batch*BATCH_DATA_SIZE*FEAT_BARCH_SIZE:(feat_batch+1)*BATCH_DATA_SIZE*FEAT_BARCH_SIZE]
 	if TRAINING_MODE != 1:
@@ -279,6 +283,7 @@ def prepare_batch_data(pc_data,img_data,feat_batch,ops,ep):
 
 	if TRAINING_MODE == 1:
 		train_feed_dict = {
+		  ops["is_training_pl"]:is_training,
 			ops["pc_placeholder"]:feat_batch_pc,
 			ops["epoch_num_placeholder"]:ep}
 		return train_feed_dict
@@ -291,6 +296,7 @@ def prepare_batch_data(pc_data,img_data,feat_batch,ops,ep):
 		
 	if TRAINING_MODE == 3:
 		train_feed_dict = {
+			ops["is_training_pl"]:is_training,
 			ops["img_placeholder"]:feat_batch_img,
 			ops["pc_placeholder"]:feat_batch_pc,
 			ops["epoch_num_placeholder"]:ep}

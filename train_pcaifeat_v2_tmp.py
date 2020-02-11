@@ -1,25 +1,24 @@
 import tensorflow as tf
 import numpy as np
-from loading_input import *
+from loading_input_tmp import *
 from pointnetvlad.pointnetvlad_cls import *
 import nets.resnet_v1_50 as resnet
 import shutil
 from multiprocessing.dummy import Pool as ThreadPool
-import threading
 import time
 import cv2
 
 #thread pool
-pool = ThreadPool(40)
+pool = ThreadPool(20)
 
 # is rand init 
 RAND_INIT = False
 # model path
-MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/model_00234078.ckpt"
-PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pc_model/pc_model_00414138.ckpt"
+MODEL_PATH = ""
+PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pc_model/pc_model_00291097.ckpt"
 IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_img/models/img_model_00072024.ckpt"
 # log path
-LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc"
+LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc_ori_label"
 # 1 for point cloud only, 2 for image only, 3 for pc&img&fc
 TRAINING_MODE = 1
 #TRAIN_ALL = True
@@ -40,11 +39,11 @@ LOAD_BATCH_SIZE = 100
 FEAT_BARCH_SIZE = 2
 LOAD_FEAT_RATIO = LOAD_BATCH_SIZE//FEAT_BARCH_SIZE
 EMBBED_SIZE = 256
-BASE_LEARNING_RATE = 3.6e-5
+BASE_LEARNING_RATE = 5e-5
 
 #pos num,neg num,other neg num,all_num
 POS_NUM = 2
-NEG_NUM = 2
+NEG_NUM = 5
 OTH_NUM = 1
 BATCH_DATA_SIZE = 1 + POS_NUM + NEG_NUM + OTH_NUM
 
@@ -56,23 +55,14 @@ MARGIN1 = 0.5
 MARGIN2 = 0.2
 
 #Train file index & pc img matching
-TRAIN_FILE = 'generate_queries/training_queries_RobotCar.pickle'
+TRAIN_FILE = '/data/lyh/lab/pointnetvlad/generating_queries/training_queries_baseline.pickle'
 TRAINING_QUERIES = get_queries_dict(TRAIN_FILE)
+
 PC_IMG_MATCH_FILE = 'generate_queries/pcai_pointcloud_image_match.pickle'
 PC_IMG_MATCH_DICT = get_pc_img_match_dict(PC_IMG_MATCH_FILE)
 
 #cur_load for get_batch_keys
 CUR_LOAD = 0
-
-#multi threading share global variable
-TRAINING_DATA = []
-TRAINING_DATA_LOCK = threading.Lock()
-#for each load batch
-BATCH_REACH_END = False
-cnt = 0
-LOAD_QUENE_SIZE = 20
-EP = 0
-
 
 def get_learning_rate(epoch):
 	learning_rate = BASE_LEARNING_RATE*((0.9)**(epoch//5))
@@ -100,11 +90,11 @@ def init_imgnetwork():
 def init_pcnetwork(step):
 	with tf.variable_scope("pc_var"):
 		pc_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BARCH_SIZE*BATCH_DATA_SIZE,4096,3])
-		is_training_pl = tf.Variable(True, name = 'is_training')
+		is_training_pl = tf.placeholder(tf.bool, shape=())
 		bn_decay = get_bn_decay(step)
 		endpoints = pointnetvlad(pc_placeholder,is_training_pl,bn_decay)
-		pc_feat = tf.layers.dense(endpoints,EMBBED_SIZE)
-	return pc_placeholder,pc_feat
+		#pc_feat = tf.layers.dense(endpoints,EMBBED_SIZE)
+	return pc_placeholder,is_training_pl,endpoints
 	
 def init_fusion_network(pc_feat,img_feat):
 	with tf.variable_scope("fusion_var"):
@@ -118,7 +108,7 @@ def init_pcainetwork():
 	
 	#init sub-network
 	if TRAINING_MODE != 2:
-		pc_placeholder, pc_feat = init_pcnetwork(step)
+		pc_placeholder,is_training_pl,pc_feat = init_pcnetwork(step)
 	if TRAINING_MODE != 1:
 		img_placeholder, img_feat = init_imgnetwork()
 	if TRAINING_MODE == 3:
@@ -175,6 +165,7 @@ def init_pcainetwork():
 	#output of pcainetwork init
 	if TRAINING_MODE == 1:
 		ops = {
+			"is_training_pl":is_training_pl,
 			"pc_placeholder":pc_placeholder,
 			"epoch_num_placeholder":epoch_num_placeholder,
 			"pc_loss":pc_loss,
@@ -195,6 +186,7 @@ def init_pcainetwork():
 		
 	if TRAINING_MODE == 3 and ONLY_TRAIN_FUSION:
 		ops = {
+			"is_training_pl":is_training_pl,
 			"pc_placeholder":pc_placeholder,
 			"img_placeholder":img_placeholder,
 			"epoch_num_placeholder":epoch_num_placeholder,
@@ -211,6 +203,7 @@ def init_pcainetwork():
 		
 	if TRAINING_MODE == 3:
 		ops = {
+			"is_training_pl":is_training_pl,
 			"pc_placeholder":pc_placeholder,
 			"img_placeholder":img_placeholder,
 			"epoch_num_placeholder":epoch_num_placeholder,
@@ -271,6 +264,7 @@ def init_train_saver():
 	return train_saver
 	
 def prepare_batch_data(pc_data,img_data,feat_batch,ops,ep):
+	is_training = True
 	if TRAINING_MODE != 2:
 		feat_batch_pc = pc_data[feat_batch*BATCH_DATA_SIZE*FEAT_BARCH_SIZE:(feat_batch+1)*BATCH_DATA_SIZE*FEAT_BARCH_SIZE]
 	if TRAINING_MODE != 1:
@@ -279,6 +273,7 @@ def prepare_batch_data(pc_data,img_data,feat_batch,ops,ep):
 
 	if TRAINING_MODE == 1:
 		train_feed_dict = {
+			ops["is_training_pl"]:is_training,
 			ops["pc_placeholder"]:feat_batch_pc,
 			ops["epoch_num_placeholder"]:ep}
 		return train_feed_dict
@@ -291,6 +286,7 @@ def prepare_batch_data(pc_data,img_data,feat_batch,ops,ep):
 		
 	if TRAINING_MODE == 3:
 		train_feed_dict = {
+			ops["is_training_pl"]:is_training,
 			ops["img_placeholder"]:feat_batch_img,
 			ops["pc_placeholder"]:feat_batch_pc,
 			ops["epoch_num_placeholder"]:ep}
@@ -369,7 +365,15 @@ def get_load_batch_filename(load_batch_keys,quadruplet):
 			pc_files.append(TRAINING_QUERIES[TRAINING_QUERIES[key]["positives"][i]]["query"])
 			img_files.append(get_correspond_img(TRAINING_QUERIES[TRAINING_QUERIES[key]["positives"][i]]["query"]))
 		
-		neg_indices = []
+		neg_files=[]
+		neg_indices=[]
+		random.shuffle(TRAINING_QUERIES[key]["negatives"])	
+		for i in range(NEG_NUM):
+			pc_files.append(TRAINING_QUERIES[TRAINING_QUERIES[key]["negatives"][i]]["query"])
+			img_files.append(get_correspond_img(TRAINING_QUERIES[TRAINING_QUERIES[key]["negatives"][i]]["query"]))
+			neg_indices.append(TRAINING_QUERIES[key]["negatives"][i])
+
+		'''
 		for i in range(NEG_NUM):
 			while True:
 				neg_ind = random.randint(0,len(TRAINING_QUERIES.keys())-1)
@@ -378,6 +382,7 @@ def get_load_batch_filename(load_batch_keys,quadruplet):
 			neg_indices.append(neg_ind)
 			pc_files.append(TRAINING_QUERIES[neg_ind]["query"])
 			img_files.append(get_correspond_img(TRAINING_QUERIES[neg_ind]["query"]))
+		'''
 		
 		if quadruplet:
 			neighbors=[]
@@ -388,13 +393,16 @@ def get_load_batch_filename(load_batch_keys,quadruplet):
 					neighbors.append(pos)
 					
 			#print("neighbors size = ",len(neighbors))
+			possible_negs= list(set(TRAINING_QUERIES.keys())-set(neighbors))
+			random.shuffle(possible_negs)
+			'''
 			while True:
 				neg_ind = random.randint(0,len(TRAINING_QUERIES.keys())-1)
 				if is_negative(neg_ind,neighbors):
 					break
-									
-			pc_files.append(TRAINING_QUERIES[neg_ind]["query"])
-			img_files.append(get_correspond_img(TRAINING_QUERIES[neg_ind]["query"]))
+			'''				
+			pc_files.append(TRAINING_QUERIES[possible_negs[0]]["query"])
+			img_files.append(get_correspond_img(TRAINING_QUERIES[possible_negs[0]]["query"]))
 	
 	if TRAINING_MODE == 1:
 		return pc_files,None
@@ -421,106 +429,16 @@ def get_batch_keys(train_file_idxs,train_file_num):
 	#print(load_batch_keys)
 	return False,load_batch_keys
 	
-def load_data(train_file_idxs):
-	global BATCH_REACH_END
-	global TRAINING_DATA
-	global cnt
-	
-	while True:
-		TRAINING_DATA_LOCK.acquire()
-		list_len = len(TRAINING_DATA)
-		TRAINING_DATA_LOCK.release()
-		if list_len > LOAD_QUENE_SIZE:
-			print("reach maximum")
-			time.sleep(1)
-			continue
-			
-		BATCH_REACH_END,load_batch_keys = get_batch_keys(train_file_idxs,train_file_idxs.shape[0])
-		if BATCH_REACH_END:
-			print("load thread ended")
-			break
-
-		#select load_batch tuple
-		load_pc_filenames,load_img_filenames = get_load_batch_filename(load_batch_keys,quadruplet)
-					
-		#load pc&img data from file
-		pc_data,img_data = load_img_pc(load_pc_filenames,load_img_filenames,pool)
-		TRAINING_DATA_LOCK.acquire()
-		TRAINING_DATA.append([pc_data,img_data])
-		TRAINING_DATA_LOCK.release()
 		
-		cnt = cnt + 1
-		print("load one batch",cnt)
-		
-	return
-
-def training(sess,train_saver,train_writer,ops):
-	global BATCH_REACH_END
-	
-	first_loop = True
-	consume_all = False
-	while True:			
-		TRAINING_DATA_LOCK.acquire()
-		list_len = len(TRAINING_DATA)
-		TRAINING_DATA_LOCK.release()
-		#determine whether the first loop
-		if not first_loop:
-			#determine whether the consume all
-			if not consume_all:
-				if list_len <= 0:
-					consume_all = True
-					#end training
-					if BATCH_REACH_END:
-						print("training thread ended")
-						break
-					continue
-			else:
-				if list_len < LOAD_QUENE_SIZE:
-					print("list_len = %d, wait for list_len >= %d"%(list_len,LOAD_QUENE_SIZE))
-					time.sleep(20)
-					continue
-				else:
-					consume_all = False
-					continue					
-		else:
-			if list_len <= 0:
-				time.sleep(1)
-				continue
-			first_loop = False
-		
-		TRAINING_DATA_LOCK.acquire()
-		cur_batch_data = TRAINING_DATA[0]
-		del(TRAINING_DATA[0])
-		TRAINING_DATA_LOCK.release()
-		pc_data = cur_batch_data[0]
-		img_data = cur_batch_data[1]
-		
-		print("consume one batch")
-	
-		for feat_batch in range(LOAD_FEAT_RATIO):
-			#prepare this batch data
-			train_feed_dict = prepare_batch_data(pc_data,img_data,feat_batch,ops,EP)
-											
-			#training
-			step = train_one_step(sess,ops,train_feed_dict,train_writer)
-						
-			#evaluate TODO
-			if step%201 == 0:
-				evaluate()
-						
-			if step%3001 == 0:
-				model_save(sess,step,train_saver)
-	
-	return
-	
-	
 def main():
 	global CUR_LOAD
-	global BATCH_REACH_END
-	global EP
 	
 	#init network pipeline
 	ops = init_pcainetwork()
+	variables = tf.contrib.framework.get_variables_to_restore()
+	for v in variables:
+		print(v)
+	exit()
 	
 	#init train saver
 	train_saver = init_train_saver()
@@ -536,26 +454,56 @@ def main():
 		init_network_variable(sess,train_saver)
 		train_writer = tf.summary.FileWriter(LOG_PATH, sess.graph)
 		
-		#init_training thread
-		training_thread = threading.Thread(target=training, args=(sess,train_saver,train_writer,ops,))
-		training_thread.start()
-
 		#start training
 		for ep in range(EPOCH):
 			train_file_num = len(TRAINING_QUERIES.keys())
 			train_file_idxs = np.arange(0,train_file_num)
 			np.random.shuffle(train_file_idxs)
 			print('Eppch = %d, train_file_num = %f , FEAT_BATCH_SIZE = %f , iteration per batch = %f' %(ep,len(train_file_idxs), FEAT_BARCH_SIZE,len(train_file_idxs)//FEAT_BARCH_SIZE))
-			EP = ep
-			BATCH_REACH_END = False
+			
+			#for each load batch
+			batch_reach_end = False
 			CUR_LOAD = 0
-			#load data thread
-			load_data_thread = threading.Thread(target=load_data, args=(train_file_idxs,))
-			load_data_thread.start()
+			#wait for delete,debug veriable
+			cnt = 0
+			while True:
+				batch_reach_end,load_batch_keys = get_batch_keys(train_file_idxs,train_file_num)
+				if(batch_reach_end):
+					break
 				
-			load_data_thread.join()
-		
-		training_thread.join()
+				#select load_batch tuple
+				load_pc_filenames,load_img_filenames = get_load_batch_filename(load_batch_keys,quadruplet)
+				
+				cnt = cnt + 1
+				print("ep = %d, cnt = %d"%(ep,cnt))
+				
+				#load pc&img data from file
+				pc_data,img_data = load_img_pc(load_pc_filenames,load_img_filenames,pool)
+				
+				#20200208 1510 done
+
+				#for each feat_batch
+				for feat_batch in range(LOAD_FEAT_RATIO):
+					#prepare this batch data
+					train_feed_dict = prepare_batch_data(pc_data,img_data,feat_batch,ops,ep)
+										
+					#training
+					step = train_one_step(sess,ops,train_feed_dict,train_writer)
+					
+					#evaluate TODO
+					if step%201 == 0:
+						evaluate()
+					
+					if step%3001 == 0:
+						model_save(sess,step,train_saver)
+					
+					#TODO: Add hard mining
+					'''
+					if(ep > HARD_MINING_START and i%701 == 0):
+            #update cached feature vectors
+            TRAINING_LATENT_VECTORS=get_latent_vectors(sess, ops, TRAINING_QUERIES)
+            print("Updated cached feature vectors")
+          '''
 						
 					
 if __name__ == "__main__":

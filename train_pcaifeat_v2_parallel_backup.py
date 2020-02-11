@@ -19,9 +19,9 @@ MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/model_00234078
 PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pc_model/pc_model_00414138.ckpt"
 IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_img/models/img_model_00072024.ckpt"
 # log path
-LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc"
+LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pcai"
 # 1 for point cloud only, 2 for image only, 3 for pc&img&fc
-TRAINING_MODE = 1
+TRAINING_MODE = 3
 #TRAIN_ALL = True
 ONLY_TRAIN_FUSION = False
 
@@ -44,7 +44,7 @@ BASE_LEARNING_RATE = 3.6e-5
 
 #pos num,neg num,other neg num,all_num
 POS_NUM = 2
-NEG_NUM = 2
+NEG_NUM = 5
 OTH_NUM = 1
 BATCH_DATA_SIZE = 1 + POS_NUM + NEG_NUM + OTH_NUM
 
@@ -71,7 +71,6 @@ TRAINING_DATA_LOCK = threading.Lock()
 BATCH_REACH_END = False
 cnt = 0
 LOAD_QUENE_SIZE = 20
-EP = 0
 
 
 def get_learning_rate(epoch):
@@ -454,7 +453,7 @@ def load_data(train_file_idxs):
 		
 	return
 
-def training(sess,train_saver,train_writer,ops):
+def training(sess,train_saver,train_writer,ops,ep):
 	global BATCH_REACH_END
 	
 	first_loop = True
@@ -499,7 +498,7 @@ def training(sess,train_saver,train_writer,ops):
 	
 		for feat_batch in range(LOAD_FEAT_RATIO):
 			#prepare this batch data
-			train_feed_dict = prepare_batch_data(pc_data,img_data,feat_batch,ops,EP)
+			train_feed_dict = prepare_batch_data(pc_data,img_data,feat_batch,ops,ep)
 											
 			#training
 			step = train_one_step(sess,ops,train_feed_dict,train_writer)
@@ -517,7 +516,6 @@ def training(sess,train_saver,train_writer,ops):
 def main():
 	global CUR_LOAD
 	global BATCH_REACH_END
-	global EP
 	
 	#init network pipeline
 	ops = init_pcainetwork()
@@ -536,26 +534,24 @@ def main():
 		init_network_variable(sess,train_saver)
 		train_writer = tf.summary.FileWriter(LOG_PATH, sess.graph)
 		
-		#init_training thread
-		training_thread = threading.Thread(target=training, args=(sess,train_saver,train_writer,ops,))
-		training_thread.start()
-
 		#start training
 		for ep in range(EPOCH):
 			train_file_num = len(TRAINING_QUERIES.keys())
 			train_file_idxs = np.arange(0,train_file_num)
 			np.random.shuffle(train_file_idxs)
 			print('Eppch = %d, train_file_num = %f , FEAT_BATCH_SIZE = %f , iteration per batch = %f' %(ep,len(train_file_idxs), FEAT_BARCH_SIZE,len(train_file_idxs)//FEAT_BARCH_SIZE))
-			EP = ep
+			
 			BATCH_REACH_END = False
 			CUR_LOAD = 0
 			#load data thread
 			load_data_thread = threading.Thread(target=load_data, args=(train_file_idxs,))
+			#training thread
+			training_thread = threading.Thread(target=training, args=(sess,train_saver,train_writer,ops,ep,))
 			load_data_thread.start()
+			training_thread.start()
 				
 			load_data_thread.join()
-		
-		training_thread.join()
+			training_thread.join()
 						
 					
 if __name__ == "__main__":
