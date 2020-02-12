@@ -11,7 +11,7 @@ from multiprocessing.dummy import Pool as ThreadPool
 pool = ThreadPool(40)
 
 # 1 for point cloud only, 2 for image only, 3 for pc&img&fc
-TRAINING_MODE = 3
+TRAINING_MODE = 1
 BATCH_SIZE = 100
 EMBBED_SIZE = 256
 
@@ -24,9 +24,9 @@ PC_IMG_MATCH_DICT = get_pc_img_match_dict(PC_IMG_MATCH_FILE)
 
 #model_path & image path
 IMAGE_PATH = '/data/lyh/RobotCar'
-PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/img_model_00003001.ckpt"
-IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/pc_model_00003001.ckpt"
-MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/model_00024008.ckpt"
+PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc_bn/pc_model_00516172.ckpt"
+IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/img_model/img_model_00291097.ckpt"
+MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/model_00219073.ckpt"
 
 def get_correspond_img(pc_filename):
 	timestamp = pc_filename[-20:-4]

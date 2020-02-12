@@ -69,10 +69,9 @@ def construct_query_dict(df_centroids, filename):
 def main():
 	all_folders=sorted(os.listdir(PC_PATH))
 	print(all_folders)
-	
 	folders=[]
 	#All runs are used for training (both full and partial)
-	index_list=range(len(all_folders))
+	index_list=range(len(all_folders)-1)
 	print("Number of runs: "+str(len(index_list)))
 	for index in index_list:
 		folders.append(all_folders[index])

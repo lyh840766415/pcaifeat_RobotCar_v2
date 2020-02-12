@@ -15,8 +15,8 @@ TRAINING_MODE = 1
 BATCH_SIZE = 100
 EMBBED_SIZE = 256
 
-DATABASE_FILE= '/data/lyh/lab/pointnetvlad/generating_queries/oxford_evaluation_database.pickle'
-QUERY_FILE= '/data/lyh/lab/pointnetvlad/generating_queries/oxford_evaluation_query.pickle'
+DATABASE_FILE= 'generate_queries/RobotCar_oxford_evaluation_database.pickle'
+QUERY_FILE= 'generate_queries/RobotCar_oxford_evaluation_query.pickle'
 PC_IMG_MATCH_FILE = 'generate_queries/pcai_pointcloud_image_match_test.pickle'
 DATABASE_SETS= get_sets_dict(DATABASE_FILE)
 #print(DATABASE_SETS.keys())
@@ -28,7 +28,7 @@ PC_IMG_MATCH_DICT = get_pc_img_match_dict(PC_IMG_MATCH_FILE)
 
 #model_path & image path
 IMAGE_PATH = '/data/lyh/RobotCar'
-PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc_ori_label/pc_model_00300100.ckpt"
+PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc_ori_label/pc_model_00474158.ckpt"
 IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/img_model/img_model_00291097.ckpt"
 MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/model_00219073.ckpt"
 

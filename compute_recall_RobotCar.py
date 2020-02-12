@@ -9,15 +9,15 @@ def get_queries_dict(filename):
 		print("feature Loaded.")
 		return queries
 
-DATABASE_VECTORS_FILENAME = "database_pc_feat_00342114.pickle"
-QUERY_VECTORS_FILENAME = "query_pc_feat_00342114.pickle"
+DATABASE_VECTORS_FILENAME = "database_pcai_feat_00003001.pickle"
+QUERY_VECTORS_FILENAME = "query_pcai_feat_00003001.pickle"
 #result output
-output_file = "result_pc_no_fc_00342114.txt"
+output_file = "result_pc_pcai_00003001.txt"
 #load feature
 DATABASE_VECTORS = get_queries_dict(DATABASE_VECTORS_FILENAME)
 QUERY_VECTORS = get_queries_dict(QUERY_VECTORS_FILENAME)
 #load label
-QUERY_FILE= 'generating_queries/RobotCar_oxford_evaluation_query.pickle'
+QUERY_FILE= 'generate_queries/RobotCar_oxford_evaluation_query.pickle'
 QUERY_SETS= get_sets_dict(QUERY_FILE)
 
 
