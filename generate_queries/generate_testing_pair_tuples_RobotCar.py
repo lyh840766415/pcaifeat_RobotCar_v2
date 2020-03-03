@@ -6,9 +6,9 @@ import os
 import pickle
 import shutil
 
-PC_PATH = "/data/lyh/benchmark_datasets/oxford"
-IMG_PATH = "/data/lyh/RobotCar"
-TRAJ_PATH = "/home/lyh/lab/RobotCarDataset-Scraper/Download"
+PC_PATH = "/data/lyh/benchmark_datasets/oxford/"
+IMG_PATH = "/data/lyh/RobotCar/stereo_centre/"
+TRAJ_PATH = "/data/lyh/RobotCar/gps_ins/"
 
 '''
 def load_pc_file(filename):

@@ -1,7 +1,8 @@
 import numpy as np
-from loading_input import *
-from pointnetvlad.pointnetvlad_cls import *
-import nets.resnet_v1_50 as resnet
+from loading_input_v3 import *
+from pointnetvlad_v3.pointnetvlad_cls import *
+import nets_v3.resnet_v1_50 as resnet
+import nets_v3.resnet_v1_fusion as resnet_fusion
 import tensorflow as tf
 from time import *
 import pickle
@@ -23,10 +24,10 @@ QUERY_SETS= get_sets_dict(QUERY_FILE)
 PC_IMG_MATCH_DICT = get_pc_img_match_dict(PC_IMG_MATCH_FILE)
 
 #model_path & image path
-IMAGE_PATH = '/data/lyh/RobotCar'
-PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/img_model_00003001.ckpt"
-IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/pc_model_00003001.ckpt"
-MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/model_00042014.ckpt"
+IMAGE_PATH = '/data/lyh/RobotCar/stereo_centre/'
+PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pc_bn/pc_model_00516172.ckpt"
+IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/img_model/img_model_00291097.ckpt"
+MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model_v3/pcai_model/model_00135045.ckpt"
 
 def get_correspond_img(pc_filename):
 	timestamp = pc_filename[-20:-4]
@@ -52,10 +53,10 @@ def save_feat_to_file(database_feat,query_feat):
 		output_to_file(query_feat["img_feat"],"query_img_feat_"+IMG_MODEL_PATH[-13:-5]+".pickle")
 	
 	if TRAINING_MODE == 3:
-		output_to_file(database_feat["pc_feat"],"database_pc_feat_"+MODEL_PATH[-13:-5]+".pickle")
-		output_to_file(query_feat["pc_feat"],"query_pc_feat_"+MODEL_PATH[-13:-5]+".pickle")
-		output_to_file(database_feat["img_feat"],"database_img_feat_"+MODEL_PATH[-13:-5]+".pickle")
-		output_to_file(query_feat["img_feat"],"query_img_feat_"+MODEL_PATH[-13:-5]+".pickle")
+		#output_to_file(database_feat["pc_feat"],"database_pc_feat_"+MODEL_PATH[-13:-5]+".pickle")
+		#output_to_file(query_feat["pc_feat"],"query_pc_feat_"+MODEL_PATH[-13:-5]+".pickle")
+		#output_to_file(database_feat["img_feat"],"database_img_feat_"+MODEL_PATH[-13:-5]+".pickle")
+		#output_to_file(query_feat["img_feat"],"query_img_feat_"+MODEL_PATH[-13:-5]+".pickle")
 		output_to_file(database_feat["pcai_feat"],"database_pcai_feat_"+MODEL_PATH[-13:-5]+".pickle")
 		output_to_file(query_feat["pcai_feat"],"query_pcai_feat_"+MODEL_PATH[-13:-5]+".pickle")
 	
@@ -121,11 +122,13 @@ def train_one_step(sess,ops,train_feed_dict):
 		return feat
 		
 	if TRAINING_MODE == 3:
-		pc_feat,img_feat,pcai_feat= sess.run([ops["pc_feat"],ops["img_feat"],ops["pcai_feat"]],feed_dict = train_feed_dict)
+		pcai_feat= sess.run([ops["pcai_feat"]],feed_dict = train_feed_dict)
+		print(pcai_feat[0].shape)
+		
 		feat = {
-			"pc_feat":pc_feat,
-			"img_feat":img_feat,
-			"pcai_feat":pcai_feat}
+			#"pc_feat":pc_feat,
+			#"img_feat":img_feat,
+			"pcai_feat":pcai_feat[0]}
 		return feat
 		
 def init_all_feat():
@@ -134,7 +137,7 @@ def init_all_feat():
 	if TRAINING_MODE != 1:
 		img_feat = np.empty([0,256],dtype=np.float32)
 	if TRAINING_MODE == 3:
-		pcai_feat = np.empty([0,256],dtype=np.float32)
+		pcai_feat = np.empty([0,1024],dtype=np.float32)
 	
 	if TRAINING_MODE == 1:
 		all_feat = {"pc_feat":pc_feat}
@@ -156,8 +159,8 @@ def concatnate_all_feat(all_feat,feat):
 	if TRAINING_MODE == 2:
 		all_feat["img_feat"] = np.concatenate((all_feat["img_feat"],feat["img_feat"]),axis=0)
 	if TRAINING_MODE == 3:
-		all_feat["pc_feat"] = np.concatenate((all_feat["pc_feat"],feat["pc_feat"]),axis=0)
-		all_feat["img_feat"] = np.concatenate((all_feat["img_feat"],feat["img_feat"]),axis=0)
+		#all_feat["pc_feat"] = np.concatenate((all_feat["pc_feat"],feat["pc_feat"]),axis=0)
+		#all_feat["img_feat"] = np.concatenate((all_feat["img_feat"],feat["img_feat"]),axis=0)
 		all_feat["pcai_feat"] = np.concatenate((all_feat["pcai_feat"],feat["pcai_feat"]),axis=0)
 	return all_feat			
 
@@ -167,8 +170,8 @@ def get_unique_all_feat(all_feat,dict_to_process):
 	if TRAINING_MODE == 2:
 		all_feat["img_feat"] = all_feat["img_feat"][0:len(dict_to_process.keys()),:]
 	if TRAINING_MODE == 3:
-		all_feat["pc_feat"] = all_feat["pc_feat"][0:len(dict_to_process.keys()),:]
-		all_feat["img_feat"] = all_feat["img_feat"][0:len(dict_to_process.keys()),:]	
+		#all_feat["pc_feat"] = all_feat["pc_feat"][0:len(dict_to_process.keys()),:]
+		#all_feat["img_feat"] = all_feat["img_feat"][0:len(dict_to_process.keys()),:]	
 		all_feat["pcai_feat"] = all_feat["pcai_feat"][0:len(dict_to_process.keys()),:]			
 	return all_feat
 		
@@ -296,9 +299,9 @@ def get_bn_decay(step):
 
 def init_imgnetwork():
 	with tf.variable_scope("img_var"):
-		img_placeholder = tf.placeholder(tf.float32,shape=[BATCH_SIZE,144,288,3])
+		img_placeholder = tf.placeholder(tf.float32,shape=[BATCH_SIZE,256,256,3])
 		endpoints,body_prefix = resnet.endpoints(img_placeholder,is_training=True)
-		img_feat = tf.layers.dense(endpoints['model_output'],EMBBED_SIZE)
+		img_feat = endpoints['img_var/resnet_v1_50/block4']
 	return img_placeholder,img_feat
 	
 def init_pcnetwork(step):
@@ -307,13 +310,17 @@ def init_pcnetwork(step):
 		is_training_pl = tf.placeholder(tf.bool, shape=())
 		bn_decay = get_bn_decay(step)
 		endpoints = pointnetvlad(pc_placeholder,is_training_pl,bn_decay)
-		pc_feat = tf.layers.dense(endpoints,EMBBED_SIZE)
+		pc_feat = endpoints
 	return pc_placeholder,is_training_pl,pc_feat
 	
 def init_fusion_network(pc_feat,img_feat):
 	with tf.variable_scope("fusion_var"):
-		img_pc_concat_feat = tf.concat((pc_feat,img_feat),axis=1)
-		pcai_feat = tf.layers.dense(img_pc_concat_feat,EMBBED_SIZE)
+		img_pc_concat_feat = tf.concat((pc_feat,img_feat),axis=3)
+		endpoints,body_prefix = resnet_fusion.endpoints(img_pc_concat_feat,is_training=True)
+	
+	pcai_feat = endpoints['model_output']
+	print(pcai_feat)
+				
 	return pcai_feat
 
 def init_pcainetwork():
@@ -322,7 +329,7 @@ def init_pcainetwork():
 	
 	#init sub-network
 	if TRAINING_MODE != 2:
-		pc_placeholder, is_training_pl, pc_feat = init_pcnetwork(step)
+		pc_placeholder, is_training_pl, pc_feat = init_pcnetwork(step)	
 	if TRAINING_MODE != 1:
 		img_placeholder, img_feat = init_imgnetwork()
 	if TRAINING_MODE == 3:
@@ -347,8 +354,8 @@ def init_pcainetwork():
 			"is_training_pl":is_training_pl,
 			"pc_placeholder":pc_placeholder,
 			"img_placeholder":img_placeholder,
-			"pc_feat":pc_feat,
-			"img_feat":img_feat,
+			#"pc_feat":pc_feat,
+			#"img_feat":img_feat,
 			"pcai_feat":pcai_feat}
 		return ops
 		

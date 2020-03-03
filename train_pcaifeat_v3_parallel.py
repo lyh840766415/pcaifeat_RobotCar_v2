@@ -1,8 +1,10 @@
 import tensorflow as tf
 import numpy as np
-from loading_input import *
-from pointnetvlad.pointnetvlad_cls import *
-import nets.resnet_v1_50 as resnet
+from loading_input_v3 import *
+from pointnetvlad_v3.pointnetvlad_cls import *
+import nets_v3.resnet_v1_50 as resnet
+import nets_v3.resnet_v1_fusion as resnet_fusion
+
 import shutil
 from multiprocessing.dummy import Pool as ThreadPool
 import threading
@@ -10,20 +12,20 @@ import time
 import cv2
 
 #thread pool
-pool = ThreadPool(40)
+pool = ThreadPool(5)
 
 # is rand init 
 RAND_INIT = False
 # model path
-MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pcai_model/model_00234078.ckpt"
+MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model_v3/pcai_model/model_00015005.ckpt"
 PC_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/pc_model/pc_model_00525175.ckpt"
 IMG_MODEL_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/model/img_model/img_model_00291097.ckpt"
 # log path
-LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_pcai_only_train_fusion"
+LOG_PATH = "/data/lyh/lab/pcaifeat_RobotCar_v2/log/train_save_v3"
 # 1 for point cloud only, 2 for image only, 3 for pc&img&fc
 TRAINING_MODE = 3
 #TRAIN_ALL = True
-ONLY_TRAIN_FUSION = True
+ONLY_TRAIN_FUSION = False
 
 
 
@@ -31,14 +33,14 @@ ONLY_TRAIN_FUSION = True
 quadruplet = True
 
 #image path
-IMAGE_PATH = "/data/lyh/RobotCar"
+IMAGE_PATH = "/data/lyh/RobotCar/stereo_centre"
 
 
 # Epoch & Batch size &FINAL EMBBED SIZE & learning rate
 EPOCH = 20
 LOAD_BATCH_SIZE = 100
-FEAT_BARCH_SIZE = 2
-LOAD_FEAT_RATIO = LOAD_BATCH_SIZE//FEAT_BARCH_SIZE
+FEAT_BATCH_SIZE = 2
+LOAD_FEAT_RATIO = LOAD_BATCH_SIZE//FEAT_BATCH_SIZE
 EMBBED_SIZE = 256
 BASE_LEARNING_RATE = 3.6e-5
 
@@ -86,30 +88,35 @@ def get_bn_decay(step):
 	BN_DECAY_DECAY_RATE = 0.5
 	BN_DECAY_DECAY_STEP = float(DECAY_STEP)
 	BN_DECAY_CLIP = 0.99
-	bn_momentum = tf.train.exponential_decay(BN_INIT_DECAY,step*FEAT_BARCH_SIZE,BN_DECAY_DECAY_STEP,BN_DECAY_DECAY_RATE,staircase=True)
+	bn_momentum = tf.train.exponential_decay(BN_INIT_DECAY,step*FEAT_BATCH_SIZE,BN_DECAY_DECAY_STEP,BN_DECAY_DECAY_RATE,staircase=True)
 	bn_decay = tf.minimum(BN_DECAY_CLIP, 1 - bn_momentum)
 	return bn_decay
 
 def init_imgnetwork():
 	with tf.variable_scope("img_var"):
-		img_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BARCH_SIZE*BATCH_DATA_SIZE,144,288,3])
+		img_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BATCH_SIZE*BATCH_DATA_SIZE,256,256,3])
 		endpoints,body_prefix = resnet.endpoints(img_placeholder,is_training=True)
-		img_feat = tf.layers.dense(endpoints['model_output'],EMBBED_SIZE)
+		
+		img_feat = endpoints['img_var/resnet_v1_50/block4']
 	return img_placeholder,img_feat
 	
 def init_pcnetwork(step):
 	with tf.variable_scope("pc_var"):
-		pc_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BARCH_SIZE*BATCH_DATA_SIZE,4096,3])
+		pc_placeholder = tf.placeholder(tf.float32,shape=[FEAT_BATCH_SIZE*BATCH_DATA_SIZE,4096,3])
 		is_training_pl = tf.placeholder(tf.bool, shape=())
 		bn_decay = get_bn_decay(step)
 		endpoints = pointnetvlad(pc_placeholder,is_training_pl,bn_decay)
-		pc_feat = tf.layers.dense(endpoints,EMBBED_SIZE)
+		pc_feat = endpoints
 	return pc_placeholder,is_training_pl,pc_feat
 	
 def init_fusion_network(pc_feat,img_feat):
 	with tf.variable_scope("fusion_var"):
-		img_pc_concat_feat = tf.concat((pc_feat,img_feat),axis=1)
-		pcai_feat = tf.layers.dense(img_pc_concat_feat,EMBBED_SIZE)
+		img_pc_concat_feat = tf.concat((pc_feat,img_feat),axis=3)
+		endpoints,body_prefix = resnet_fusion.endpoints(img_pc_concat_feat,is_training=True)
+	
+	pcai_feat = endpoints['model_output']
+	print(pcai_feat)
+				
 	return pcai_feat
 
 def init_pcainetwork():
@@ -118,29 +125,16 @@ def init_pcainetwork():
 	
 	#init sub-network
 	if TRAINING_MODE != 2:
-		pc_placeholder, is_training_pl, pc_feat = init_pcnetwork(step)
+		pc_placeholder, is_training_pl, pc_feat = init_pcnetwork(step)	
 	if TRAINING_MODE != 1:
 		img_placeholder, img_feat = init_imgnetwork()
 	if TRAINING_MODE == 3:
 		pcai_feat = init_fusion_network(pc_feat,img_feat)
 	
-	#prepare data and loss
-	if TRAINING_MODE != 2:
-		pc_feat = tf.reshape(pc_feat,[FEAT_BARCH_SIZE,BATCH_DATA_SIZE,pc_feat.shape[1]])
-		q_pc_vec, pos_pc_vec, neg_pc_vec, oth_pc_vec = tf.split(pc_feat, [1,POS_NUM,NEG_NUM,OTH_NUM],1)
-		pc_loss = lazy_quadruplet_loss(q_pc_vec, pos_pc_vec, neg_pc_vec, oth_pc_vec, MARGIN1, MARGIN2)
-		tf.summary.scalar('pc_loss', pc_loss)
 
-		
-	if TRAINING_MODE != 1:
-		img_feat = tf.reshape(img_feat,[FEAT_BARCH_SIZE,BATCH_DATA_SIZE,img_feat.shape[1]])
-		q_img_vec, pos_img_vec, neg_img_vec, oth_img_vec = tf.split(img_feat, [1,POS_NUM,NEG_NUM,OTH_NUM],1)
-		img_loss = lazy_quadruplet_loss(q_img_vec, pos_img_vec, neg_img_vec, oth_img_vec, MARGIN1, MARGIN2)
-		tf.summary.scalar('img_loss', img_loss)
-	
-	
+	#prepare data and loss		
 	if TRAINING_MODE == 3:
-		pcai_feat = tf.reshape(pcai_feat,[FEAT_BARCH_SIZE,BATCH_DATA_SIZE,pcai_feat.shape[1]])
+		pcai_feat = tf.reshape(pcai_feat,[FEAT_BATCH_SIZE,BATCH_DATA_SIZE,pcai_feat.shape[1]])
 		q_vec, pos_vec, neg_vec, oth_vec = tf.split(pcai_feat, [1,POS_NUM,NEG_NUM,OTH_NUM],1)
 		all_loss = lazy_quadruplet_loss(q_vec, pos_vec, neg_vec, oth_vec, MARGIN1, MARGIN2)
 		tf.summary.scalar('all_loss', all_loss)
@@ -162,10 +156,6 @@ def init_pcainetwork():
 	
 	#training operation
 	with tf.control_dependencies(update_ops):
-		if TRAINING_MODE != 2:
-			pc_train_op = optimizer.minimize(pc_loss, global_step=step)
-		if TRAINING_MODE != 1:
-			img_train_op = optimizer.minimize(img_loss, global_step=step)
 		if TRAINING_MODE == 3:
 			all_train_op = optimizer.minimize(all_loss, global_step=step)
 	
@@ -217,11 +207,7 @@ def init_pcainetwork():
 			"pc_placeholder":pc_placeholder,
 			"img_placeholder":img_placeholder,
 			"epoch_num_placeholder":epoch_num_placeholder,
-			"pc_loss":pc_loss,
-			"img_loss":img_loss,
 			"all_loss":all_loss,
-			"pc_train_op":pc_train_op,
-			"img_train_op":img_train_op,
 			"all_train_op":all_train_op,
 			"merged":merged,
 			"step":step}
@@ -253,12 +239,12 @@ def init_network_variable(sess,train_saver):
 		return
 	
 	if TRAINING_MODE == 3:
-		train_saver['pc_saver'].restore(sess,PC_MODEL_PATH)
-		print("pc_model restored")
-		train_saver['img_saver'].restore(sess,IMG_MODEL_PATH)
-		print("img_model restored")
-		#train_saver['all_saver'].restore(sess,MODEL_PATH)
-		#print("all_model restored")
+		#train_saver['pc_saver'].restore(sess,PC_MODEL_PATH)
+		#print("pc_model restored")
+		#train_saver['img_saver'].restore(sess,IMG_MODEL_PATH)
+		#print("img_model restored")
+		train_saver['all_saver'].restore(sess,MODEL_PATH)
+		print("all_model restored")
 		return
 
 def init_train_saver():
@@ -274,8 +260,15 @@ def init_train_saver():
 		print(v)
 	'''	
 	
-	pc_saver = tf.train.Saver(pc_variable)
-	img_saver = tf.train.Saver(img_variable)
+	if TRAINING_MODE != 2:
+		pc_saver = tf.train.Saver(pc_variable)
+	else:
+		pc_saver = None
+		
+	if TRAINING_MODE != 1:
+		img_saver = tf.train.Saver(img_variable)
+	else:
+		img_saver = None
 	
 	train_saver = {
 		'all_saver':all_saver,
@@ -287,9 +280,9 @@ def init_train_saver():
 def prepare_batch_data(pc_data,img_data,feat_batch,ops,ep):
 	is_training = True
 	if TRAINING_MODE != 2:
-		feat_batch_pc = pc_data[feat_batch*BATCH_DATA_SIZE*FEAT_BARCH_SIZE:(feat_batch+1)*BATCH_DATA_SIZE*FEAT_BARCH_SIZE]
+		feat_batch_pc = pc_data[feat_batch*BATCH_DATA_SIZE*FEAT_BATCH_SIZE:(feat_batch+1)*BATCH_DATA_SIZE*FEAT_BATCH_SIZE]
 	if TRAINING_MODE != 1:
-		feat_batch_img = img_data[feat_batch*BATCH_DATA_SIZE*FEAT_BARCH_SIZE:(feat_batch+1)*BATCH_DATA_SIZE*FEAT_BARCH_SIZE]
+		feat_batch_img = img_data[feat_batch*BATCH_DATA_SIZE*FEAT_BATCH_SIZE:(feat_batch+1)*BATCH_DATA_SIZE*FEAT_BATCH_SIZE]
 	
 
 	if TRAINING_MODE == 1:
@@ -562,7 +555,7 @@ def main():
 			train_file_num = len(TRAINING_QUERIES.keys())
 			train_file_idxs = np.arange(0,train_file_num)
 			np.random.shuffle(train_file_idxs)
-			print('Eppch = %d, train_file_num = %f , FEAT_BATCH_SIZE = %f , iteration per batch = %f' %(ep,len(train_file_idxs), FEAT_BARCH_SIZE,len(train_file_idxs)//FEAT_BARCH_SIZE))
+			print('Eppch = %d, train_file_num = %f , FEAT_BATCH_SIZE = %f , iteration per batch = %f' %(ep,len(train_file_idxs), FEAT_BATCH_SIZE,len(train_file_idxs)//FEAT_BATCH_SIZE))
 			EP = ep
 			BATCH_REACH_END = False
 			CUR_LOAD = 0

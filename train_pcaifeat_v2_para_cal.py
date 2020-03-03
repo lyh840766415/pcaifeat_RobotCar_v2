@@ -123,6 +123,18 @@ def init_pcainetwork():
 		img_placeholder, img_feat = init_imgnetwork()
 	if TRAINING_MODE == 3:
 		pcai_feat = init_fusion_network(pc_feat,img_feat)
+		
+	total_parameters = 0
+	for variable in tf.trainable_variables():
+		# shape is an array of tf.Dimension
+		shape = variable.get_shape()
+		variable_parameters = 1
+		for dim in shape:
+			variable_parameters *= dim.value
+			total_parameters += variable_parameters
+	
+	print("total_parameters = ",total_parameters)
+	exit()
 	
 	#prepare data and loss
 	if TRAINING_MODE != 2:
